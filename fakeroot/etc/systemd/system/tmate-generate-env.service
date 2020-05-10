@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate tmate-ssh-server env vars
+After=NetworkManager-wait-online.service
+Before=tmate-ssh-server.service
+
+[Service]
+ExecStart=/var/usrlocal/bin/tmate-generate-environment.sh
+Type=oneshot
+
+[Install]
+WantedBy=multi-user.target
