@@ -1,1 +1,4 @@
 fakeroot/root/.ssh/authorized_keys
+fcos-ssh-keys/*
+!fcos-ssh-keys/.gitkeep
+*.ign
