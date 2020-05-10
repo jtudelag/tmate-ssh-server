@@ -1,6 +1,6 @@
 [Unit]
 Description=Generate tmate-ssh-server env vars
-After=NetworkManager-wait-online.service
+After=network-online.target
 Before=tmate-ssh-server.service
 
 [Service]
