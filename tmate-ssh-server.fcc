@@ -1,0 +1,105 @@
+variant: fcos
+version: 1.0.0
+passwd:
+  users:
+    - name: core
+      password_hash: "XXX"
+      ssh_authorized_keys:
+        - ssh-rsa XXX
+storage:
+  files:
+    - path: /var/usrlocal/bin/tmate-generate-environment.sh
+      contents:
+        inline: |
+          #!/bin/bash
+          ENVFILE=/etc/tmate-ssh-server.env
+
+          echo "SSH_PORT_LISTEN=2222" > "${ENVFILE}"
+          echo "SSH_HOSTNAME=$(ip route get 1.1.1.1 | grep -oP 'src \K\S+')" >>  "${ENVFILE}"
+          echo "SSH_KEYS_PATH=/ssh-keys" >> "${ENVFILE}"
+          echo "HAS_WEBSOCKET=0" >> "${ENVFILE}"
+          echo "USE_PROXY_PROTOCOL=0" >> "${ENVFILE}"
+      mode: 0744
+    - path: /var/usrlocal/bin/tmate-create-keys.sh
+      contents:
+        inline: |
+          #!/bin/bash
+          set -eu
+
+          PRIVATE_SSH_KEYS_FOLDER="${SSH_KEYS_FOLDER:-/var/usrlocal/lib/tmate-ssh-keys}"
+
+          gen_key() {
+            keytype=$1
+            ks="${keytype}_"
+            key="${PRIVATE_SSH_KEYS_FOLDER}/ssh_host_${ks}key"
+            if [ ! -e "${key}" ] ; then
+              ssh-keygen -t ${keytype} -f "${key}" -N ''
+              echo ""
+            fi
+            SIG=$(ssh-keygen -l -E SHA256 -f $key.pub | cut -d ' ' -f 2)
+          }
+
+          rm -rf "${PRIVATE_SSH_KEYS_FOLDER}"
+          mkdir -p "${PRIVATE_SSH_KEYS_FOLDER}"
+
+          gen_key rsa
+          RSA_SIG=$SIG
+          gen_key ed25519
+          ED25519_SIG=$SIG
+
+          echo "You may use the following settings this in your .tmate.conf:"
+          echo ""
+          echo "set -g tmate-server-host ${SSH_HOSTNAME}"
+          echo "set -g tmate-server-port ${SSH_PORT_LISTEN}"
+          echo "set -g tmate-server-rsa-fingerprint ${RSA_SIG}"
+          echo "set -g tmate-server-ed25519-fingerprint ${ED25519_SIG}"
+          echo ""
+      mode: 0744
+systemd:
+  units:
+    - name: tmate-generate-env.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Generate tmate-ssh-server env vars
+        After=network-online.target
+        Before=tmate-ssh-server.service
+         
+        [Service]
+        ExecStart=/var/usrlocal/bin/tmate-generate-environment.sh
+        Type=oneshot
+         
+        [Install]
+        WantedBy=multi-user.target
+    - name: tmate-ssh-server.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Podman container tmate SSH Server
+        Documentation=man:podman-generate-systemd(1)
+        Wants=tmate-generate-env.service
+        After=tmate-generate-env.service
+        
+        [Service]
+        Restart=on-failure
+        EnvironmentFile=/etc/tmate-ssh-server.env
+        ExecStartPre=/var/usrlocal/bin/tmate-create-keys.sh
+        ExecStartPre=/usr/bin/rm -f %t/%n-pid %t/%n-cid
+        ExecStart=/usr/bin/podman run -d  \
+                              --conmon-pidfile %t/%n-pid \
+                              --cidfile %t/%n-cid \
+                              --cgroups=enabled \
+                              -it \
+                              -p "${SSH_PORT_LISTEN}":"${SSH_PORT_LISTEN}" \
+                              --privileged \
+                              -v /var/usrlocal/lib/tmate-ssh-keys/:/ssh-keys/:Z \
+                              --env-file /etc/tmate-ssh-server.env \
+                              'docker.io/tmate/tmate-ssh-server@sha256:c29afc5cc018d081a494067a8dd637c283fcadedd32255257560fd0f42f9b982'
+        ExecStop=/usr/bin/podman stop --ignore --cidfile %t/%n-cid -t 10
+        ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/%n-cid
+        PIDFile=%t/%n-pid
+        KillMode=none
+        Type=forking
+         
+        [Install]
+        WantedBy=multi-user.target
